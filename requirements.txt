@@ -11,9 +11,9 @@ pylint==2.15.3
 #uvicorn==0.18.3
 
 #sentiment and ml
-torchtext
-datasets
-nltk
-torch
-tqdm
+# torchtext
+# datasets
+# nltk
+torch==2.2.0
+tqdm==4.66.1
 #collections
