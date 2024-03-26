@@ -28,16 +28,16 @@ class Task:
         loss_fct = nn.MSELoss()
         return x, y, loss_fct
     
-    def sample_linear(self,K):
+    def sample_linear(self,N):
         '''Sample K linear data points from the task. Return x, y and the loss function.'''
-        x = torch.randn((K, self.dimension))
+        x = torch.randn((N, self.dimension))
         y = torch.matmul(x, self.slope) + self.bias
         loss_fct = nn.MSELoss()
         return x, y, loss_fct
 
 
 @torch.no_grad() # Decorator to disable gradient computation
-def sample_task(functional_class = "sinusoid", linear_bias = False, bias_var = 1, dimension = 1):
+def sample_task(functional_class = "sinusoid", linear_bias = False, bias_var = 1, dimension = 10):
     if functional_class == "sinusoid":
         # for sinusoid tasks
         a = torch.rand(1).item() * 4.9 + .1  # Sample the amplitude in [0.1, 5.0]
@@ -127,7 +127,7 @@ def maml(p_model, meta_optimizer, inner_training_steps, nb_epochs, N, alpha, M=1
         # Meta update
         meta_optimizer.zero_grad()
         batch_training_loss = []
-        for i in range(N):
+        for i in range(M):
             x, y, loss_fct = D_i_prime[i]
             f_theta_prime = theta_i_prime[i]
             # Compute \nabla_theta L(f_theta_i_prime) for task ti
@@ -153,8 +153,8 @@ if __name__ == "__main__":
     linear_bias = False
     bias_var = 1
     dimension = 10
-    M = 10
-    N = 5
+    M = 15
+    N = 10
     params = [torch.rand(40, dimension, device=device).uniform_(-np.sqrt(6. / 41), np.sqrt(6. / 41)).requires_grad_(),
               torch.zeros(40, device=device).requires_grad_(),
               torch.rand(40, 40, device=device).uniform_(-np.sqrt(6. / 80), np.sqrt(6. / 80)).requires_grad_(),
