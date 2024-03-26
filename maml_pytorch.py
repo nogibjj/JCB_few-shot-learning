@@ -14,11 +14,12 @@ def mlp(x, params):
 
 class Task:
 
-    def __init__(self, a=None, b=None, slope=None, bias=None):
+    def __init__(self, a=None, b=None, slope=None, bias=None, dimension = None):
         self.a = a
         self.b = b
         self.slope = slope
         self.bias = bias
+        self.dimension = dimension
 
     def sample_sinusoid(self, K):
         '''Sample K sinusoid data points from the task. Return x, y and the loss function.'''
@@ -29,17 +30,14 @@ class Task:
     
     def sample_linear(self,K):
         '''Sample K linear data points from the task. Return x, y and the loss function.'''
-        x = torch.randn((K,1))
-        y = self.slope * x + self.bias
+        x = torch.randn((K, self.dimension))
+        y = torch.matmul(x, self.slope) + self.bias
         loss_fct = nn.MSELoss()
         return x, y, loss_fct
 
 
-
-
-
 @torch.no_grad() # Decorator to disable gradient computation
-def sample_task(functional_class = "sinusoid", linear_bias = False, bias_var = 1):
+def sample_task(functional_class = "sinusoid", linear_bias = False, bias_var = 1, dimension = 1):
     if functional_class == "sinusoid":
         # for sinusoid tasks
         a = torch.rand(1).item() * 4.9 + .1  # Sample the amplitude in [0.1, 5.0]
@@ -47,18 +45,30 @@ def sample_task(functional_class = "sinusoid", linear_bias = False, bias_var = 1
         return Task(a=a, b=b)
     elif functional_class == "linear":
         # for linear tasks
-        slope = torch.randn(1).item() + 1
-        bias = torch.randn(1) * torch.sqrt(torch.tensor(bias_var)).item() if linear_bias else 0  
-        return Task(slope=slope, bias= bias)
+        slope = torch.randn(dimension, 1) + 1 if dimension > 1 else torch.randn(dimension).item() + 1
+        if linear_bias:
+            bias = torch.rand(1) * torch.sqrt(torch.tensor(bias_var)).item()
+        else:
+            bias = 0
+        return Task(slope=slope, bias= bias, dimension = dimension)
 
 
-def perform_k_training_steps(params, task, batch_size, inner_training_steps, alpha, functional_class='sinusoid', device='cpu'):
-    ''' Perform k gradient steps on the task (inner loop)'''
+def perform_k_training_steps(params, task, N, inner_training_steps, alpha, functional_class='sinusoid', device='cpu'):
+    ''' Perform k gradient steps on the task (inner loop)
+    :param params: List of parameters to optimize
+    :param task: Task to perform the gradient steps on
+    :param N: Batch size
+    :param inner_training_steps: Number of gradient steps
+    :param alpha: Learning rate
+    :param functional_class: Type of function to approximate
+    :param device: Device to run the computations on
+    :return: Updated parameters
+    '''
     for epoch in range(inner_training_steps):
         if functional_class == 'sinusoid':
-            x_batch, target, loss_fct = task.sample_sinusoid(batch_size)
+            x_batch, target, loss_fct = task.sample_sinusoid(N)
         elif functional_class == 'linear':
-            x_batch, target, loss_fct = task.sample_linear(batch_size)
+            x_batch, target, loss_fct = task.sample_linear(N)
 
         loss = loss_fct(mlp(x_batch.to(device), params), target.to(device))
 
@@ -70,9 +80,22 @@ def perform_k_training_steps(params, task, batch_size, inner_training_steps, alp
     return params
 
 
-def maml(p_model, meta_optimizer, inner_training_steps, nb_epochs, batch_size_K, alpha, nb_tasks=10, functional_class="sinusoid", linear_bias = False, bias_var = 1, device='cpu'):
+def maml(p_model, meta_optimizer, inner_training_steps, nb_epochs, N, alpha, M=10, functional_class="sinusoid", linear_bias = False, bias_var = 1, dimension = 10, device='cpu'):
     """
     Algorithm from https://arxiv.org/pdf/1703.03400v3.pdf (MAML for Few-Shot Supervised Learning)
+    :param p_model: List of parameters to optimize
+    :param meta_optimizer: Optimizer for the meta-update
+    :param inner_training_steps: Number of gradient steps in the inner loop
+    :param nb_epochs: Number of epochs for the outer loop
+    :param N: Batch size for the inner loop
+    :param alpha: Learning rate for the inner loop
+    :param M: Number of tasks to sample
+    :param functional_class: Type of function to approximate
+    :param linear_bias: Whether to include a bias term in the linear function
+    :param bias_var: Variance of the bias term in the linear function
+    :param dimension: Dimension of the input space in the linear function
+    :param device: Device to run the computations on
+    :return: List of training losses
     """
     training_loss = []
     for epoch in tqdm(range(nb_epochs)):  # Line 2 in the pseudocode
@@ -81,13 +104,13 @@ def maml(p_model, meta_optimizer, inner_training_steps, nb_epochs, batch_size_K,
         D_i_prime = []
 
         # Sample batch of tasks
-        tasks = [sample_task(functional_class=functional_class, linear_bias=linear_bias, bias_var=bias_var) for _ in range(nb_tasks)]  # Line 3 in the pseudocode
+        tasks = [sample_task(functional_class=functional_class, linear_bias=linear_bias, bias_var=bias_var, dimension=dimension) for _ in range(M)]  # Line 3 in the pseudocode
         for task in tasks:
             theta_i_prime.append(
                 perform_k_training_steps(
                     params=[p.clone() for p in p_model],
                     task=task,
-                    batch_size=batch_size_K,
+                    N=N,
                     inner_training_steps=inner_training_steps,
                     alpha=alpha,
                     functional_class=functional_class,
@@ -104,7 +127,7 @@ def maml(p_model, meta_optimizer, inner_training_steps, nb_epochs, batch_size_K,
         # Meta update
         meta_optimizer.zero_grad()
         batch_training_loss = []
-        for i in range(nb_tasks):
+        for i in range(N):
             x, y, loss_fct = D_i_prime[i]
             f_theta_prime = theta_i_prime[i]
             # Compute \nabla_theta L(f_theta_i_prime) for task ti
@@ -119,7 +142,7 @@ def maml(p_model, meta_optimizer, inner_training_steps, nb_epochs, batch_size_K,
     torch.save({
         'model_state_dict': [p.clone() for p in p_model],
         'meta_optimizer_state_dict': meta_optimizer.state_dict(),
-    }, f'models/MAML_M{nb_epochs}_N{nb_tasks}_dim.pth')
+    }, f'models/MAML_M{M}_N{N}_dim{dimension}.pth')
 
     return training_loss
 
@@ -129,7 +152,10 @@ if __name__ == "__main__":
     functional_class = 'linear'
     linear_bias = False
     bias_var = 1
-    params = [torch.rand(40, 1, device=device).uniform_(-np.sqrt(6. / 41), np.sqrt(6. / 41)).requires_grad_(),
+    dimension = 10
+    M = 10
+    N = 5
+    params = [torch.rand(40, dimension, device=device).uniform_(-np.sqrt(6. / 41), np.sqrt(6. / 41)).requires_grad_(),
               torch.zeros(40, device=device).requires_grad_(),
               torch.rand(40, 40, device=device).uniform_(-np.sqrt(6. / 80), np.sqrt(6. / 80)).requires_grad_(),
               torch.zeros(40, device=device).requires_grad_(),
@@ -143,41 +169,43 @@ if __name__ == "__main__":
         meta_optimizer= meta_optimizer,
         inner_training_steps=1,
         nb_epochs=70_000,
-        batch_size_K=10,
+        N=N,
         alpha=1e-3,
-        nb_tasks=10,
+        M=M,
         functional_class=functional_class,
         linear_bias=linear_bias,
         bias_var=bias_var,
-        device=device 
+        device=device, 
+        dimension=dimension
     )
 
-    plt.title('MAML, K=10')
-    x = torch.linspace(-5, 5, 50).to(device)
-    y = mlp(x[..., None], params)
-    plt.plot(x.data.cpu().numpy(), y.data.cpu().numpy(), c='lightgreen', linestyle='--', linewidth=2.2,
-             label='pre-update')
-    # New task
-    task = sample_task(functional_class=functional_class, linear_bias=linear_bias, bias_var=bias_var)
-    if functional_class == 'linear':
-        ground_truth_y = task.slope * x + task.bias
-    elif functional_class == 'sinusoid':
-        ground_truth_y = task.a * torch.sin(x + task.b)
-    plt.plot(x.data.cpu().numpy(), ground_truth_y.data.cpu().numpy(), c='red', label='ground truth')
-    # Fine-tuning, 10 gradient steps
-    new_params = perform_k_training_steps(
-        params = [p.clone() for p in params], 
-        task = task, 
-        batch_size=10,
-        inner_training_steps=10,
-        alpha=1e-3,
-        functional_class=functional_class,
-        device=device
-    )
-    # After 10 gradient steps
-    y = mlp(x[..., None], new_params)
-    plt.plot(x.data.cpu().numpy(), y.data.cpu().numpy(), c='darkgreen', linestyle='--', linewidth=2.2,
-             label='10 grad step')
-    plt.legend()
-    plt.savefig('maml.png')
-    plt.show()
+    # # Evaluation process
+    # plt.title('MAML, K=10')
+    # x = torch.linspace(-5, 5, 50).to(device)
+    # y = mlp(x[..., None], params)
+    # plt.plot(x.data.cpu().numpy(), y.data.cpu().numpy(), c='lightgreen', linestyle='--', linewidth=2.2,
+    #          label='pre-update')
+    # # New task
+    # task = sample_task(functional_class=functional_class, linear_bias=linear_bias, bias_var=bias_var, dimension = dimension)
+    # if functional_class == 'linear':
+    #     ground_truth_y = task.slope * x + task.bias
+    # elif functional_class == 'sinusoid':
+    #     ground_truth_y = task.a * torch.sin(x + task.b)
+    # plt.plot(x.data.cpu().numpy(), ground_truth_y.data.cpu().numpy(), c='red', label='ground truth')
+    # # Fine-tuning, 10 gradient steps
+    # new_params = perform_k_training_steps(
+    #     params = [p.clone() for p in params], 
+    #     task = task, 
+    #     batch_size=10,
+    #     inner_training_steps=10,
+    #     alpha=1e-3,
+    #     functional_class=functional_class,
+    #     device=device
+    # )
+    # # After 10 gradient steps
+    # y = mlp(x[..., None], new_params)
+    # plt.plot(x.data.cpu().numpy(), y.data.cpu().numpy(), c='darkgreen', linestyle='--', linewidth=2.2,
+    #          label='10 grad step')
+    # plt.legend()
+    # plt.savefig('maml.png')
+    # plt.show()
