@@ -139,10 +139,16 @@ def maml(p_model, meta_optimizer, inner_training_steps, nb_epochs, N, alpha, M=1
         training_loss.append(np.mean(batch_training_loss))
     
     # Save the model
-    torch.save({
-        'model_state_dict': [p.clone() for p in p_model],
-        'meta_optimizer_state_dict': meta_optimizer.state_dict(),
-    }, f'models/MAML_M{M}_N{N}_dim{dimension}.pth')
+    if linear_bias:
+        torch.save({
+            'model_state_dict': [p.clone() for p in p_model],
+            'meta_optimizer_state_dict': meta_optimizer.state_dict(),
+        }, f'models/MAML_M{M}_N{N}_dim{dimension}_bias{bias_var}.pth')
+    else:
+        torch.save({
+            'model_state_dict': [p.clone() for p in p_model],
+            'meta_optimizer_state_dict': meta_optimizer.state_dict(),
+        }, f'models/MAML_M{M}_N{N}_dim{dimension}.pth')
 
     return training_loss
 
@@ -150,10 +156,10 @@ def maml(p_model, meta_optimizer, inner_training_steps, nb_epochs, N, alpha, M=1
 if __name__ == "__main__":
     device = 'cpu'
     functional_class = 'linear'
-    linear_bias = False
-    bias_var = 1
+    linear_bias = True
+    bias_var = 2
     dimension = 10
-    M = 15
+    M = 10
     N = 10
     params = [torch.rand(40, dimension, device=device).uniform_(-np.sqrt(6. / 41), np.sqrt(6. / 41)).requires_grad_(),
               torch.zeros(40, device=device).requires_grad_(),
